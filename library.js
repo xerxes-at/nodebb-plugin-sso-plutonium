@@ -46,22 +46,22 @@ const winston = require.main.require('winston');
 	 */
 
 const constants = Object.freeze({
-	type: '', // Either 'oauth' or 'oauth2'
-	name: '', // Something unique to your OAuth provider in lowercase, like "github", or "nodebb"
-	oauth: {
-		requestTokenURL: '',
-		accessTokenURL: '',
-		userAuthorizationURL: '',
-		consumerKey: nconf.get('oauth:key'), // don't change this line
-		consumerSecret: nconf.get('oauth:secret'), // don't change this line
-	},
+	type: 'oauth2', // Either 'oauth' or 'oauth2'
+	name: 'plutonium', // Something unique to your OAuth provider in lowercase, like "github", or "nodebb"
+	// oauth: {
+	// 	requestTokenURL: '',
+	// 	accessTokenURL: '',
+	// 	userAuthorizationURL: '',
+	// 	consumerKey: nconf.get('oauth:key'), // don't change this line
+	// 	consumerSecret: nconf.get('oauth:secret'), // don't change this line
+	// },
 	oauth2: {
-		authorizationURL: '',
-		tokenURL: '',
-		clientID: nconf.get('oauth:id'), // don't change this line
-		clientSecret: nconf.get('oauth:secret'), // don't change this line
+		authorizationURL: 'https://forum.plutonium.pw/oauth2/authorize',
+		tokenURL: 'https://forum.plutonium.pw/oauth2/token',
+		clientID: nconf.get('plutonium-oauth:id'), // don't change this line
+		clientSecret: nconf.get('plutonium-oauth:secret'), // don't change this line
 	},
-	userRoute: '', // This is the address to your app's "user profile" API endpoint (expects JSON)
+	userRoute: 'https://forum.plutonium.pw/oauth2/@me', // This is the address to your app's "user profile" API endpoint (expects JSON)
 });
 
 const OAuth = {};
@@ -119,7 +119,7 @@ OAuth.getStrategy = function (strategies, callback) {
 			passportOAuth.Strategy.prototype.userProfile = function (accessToken, done) {
 				// If your OAuth provider requires the access token to be sent in the query  parameters
 				// instead of the request headers, comment out the next line:
-				this._oauth2._useAuthorizationHeaderForGET = true;
+				//this._oauth2._useAuthorizationHeaderForGET = true;
 
 				this._oauth2.get(constants.userRoute, accessToken, (err, body/* , res */) => {
 					if (err) {
@@ -146,9 +146,9 @@ OAuth.getStrategy = function (strategies, callback) {
 		passport.use(constants.name, new passportOAuth(opts, async (req, token, secret, profile, done) => {
 			const user = await OAuth.login({
 				oAuthid: profile.id,
-				handle: profile.displayName,
-				email: profile.emails[0].value,
-				isAdmin: profile.isAdmin,
+				//handle: profile.displayName,
+				//email: profile.emails[0].value,
+				//isAdmin: profile.isAdmin,
 			});
 
 			authenticationController.onSuccessfulLogin(req, user.uid);
@@ -175,7 +175,7 @@ OAuth.parseUserReturn = function (data, callback) {
 	// Everything else is optional.
 
 	// Find out what is available by uncommenting this line:
-	// console.log(data);
+	 console.log(data);
 
 	const profile = {};
 	profile.id = data.id;
@@ -201,40 +201,42 @@ OAuth.login = async (payload) => {
 			uid: uid,
 		});
 	}
+	//Plutonium does not expose user email addresses so trying to use them as backup won't work
+	return;
 
 	// Check for user via email fallback
-	uid = await User.getUidByEmail(payload.email);
-	if (!uid) {
-		/**
-			 * The email retrieved from the user profile might not be trusted.
-			 * Only you would know — it's up to you to decide whether or not to:
-			 *   - Send the welcome email which prompts for verification (default)
-			 *   - Bypass the welcome email and automatically verify the email (commented out, below)
-			 */
-		const { email } = payload;
+	// uid = await User.getUidByEmail(payload.email);
+	// if (!uid) {
+	// 	/**
+	// 		 * The email retrieved from the user profile might not be trusted.
+	// 		 * Only you would know — it's up to you to decide whether or not to:
+	// 		 *   - Send the welcome email which prompts for verification (default)
+	// 		 *   - Bypass the welcome email and automatically verify the email (commented out, below)
+	// 		 */
+	// 	const { email } = payload;
 
-		// New user
-		uid = await User.create({
-			username: payload.handle,
-			email, // if you uncomment the block below, comment this line out
-		});
+	// 	// New user
+	// 	uid = await User.create({
+	// 		username: payload.handle,
+	// 		email, // if you uncomment the block below, comment this line out
+	// 	});
 
-		// Automatically confirm user email
-		// await User.setUserField(uid, 'email', email);
-		// await UserEmail.confirmByUid(uid);
-	}
+	// 	// Automatically confirm user email
+	// 	// await User.setUserField(uid, 'email', email);
+	// 	// await UserEmail.confirmByUid(uid);
+	// }
 
 	// Save provider-specific information to the user
-	await User.setUserField(uid, `${constants.name}Id`, payload.oAuthid);
-	await db.setObjectField(`${constants.name}Id:uid`, payload.oAuthid, uid);
+	// await User.setUserField(uid, `${constants.name}Id`, payload.oAuthid);
+	// await db.setObjectField(`${constants.name}Id:uid`, payload.oAuthid, uid);
 
-	if (payload.isAdmin) {
-		await Groups.join('administrators', uid);
-	}
+	// if (payload.isAdmin) {
+	// 	await Groups.join('administrators', uid);
+	// }
 
-	return {
-		uid: uid,
-	};
+	// return {
+	// 	uid: uid,
+	// };
 };
 
 OAuth.getUidByOAuthid = async oAuthid => db.getObjectField(`${constants.name}Id:uid`, oAuthid);
