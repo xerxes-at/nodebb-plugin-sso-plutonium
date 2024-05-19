@@ -4,9 +4,12 @@
 	"description": "NodeBB Plugin that allows users to login via plutonium.pw.",
 	"url": "https://github.com/xerxes-at/nodebb-plugin-sso-plutonium",
 	"library": "./library.js",
+	"templates": "templates",
 	"hooks": [
+		{ "hook": "static:app.load", "method": "init" },
 		{ "hook": "static:user.delete", "method": "deleteUserData" },
 		{ "hook": "filter:user.whitelistFields", "method": "whitelistFields" },
-		{ "hook": "filter:auth.init", "method": "getStrategy" }
+		{ "hook": "filter:auth.init", "method": "getStrategy" },
+		{ "hook": "filter:auth.list", "method": "getAssociation" }
 	]
 }

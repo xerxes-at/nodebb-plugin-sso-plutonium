@@ -62,6 +62,8 @@ const constants = Object.freeze({
 		clientSecret: nconf.get('plutonium-oauth:secret'), // don't change this line
 	},
 	userRoute: 'https://forum.plutonium.pw/oauth2/@me', // This is the address to your app's "user profile" API endpoint (expects JSON)
+	scope: "identify",
+	icon: "fa-atom",
 });
 
 const OAuth = {};
@@ -77,53 +79,117 @@ if (!constants.name) {
 	winston.error('[sso-oauth] User Route required (library.js:31)');
 } else {
 	configOk = true;
+	winston.info("[sso-oauth] Pluto SSO config pass");
 }
 
+OAuth.init = function (data, callback) {
+	const hostHelpers = require.main.require('./src/routes/helpers');
+
+	/*hostHelpers.setupAdminPageRoute(data.router, '/admin/plugins/sso-plutonium', (req, res) => {
+		res.render('admin/plugins/sso-plutonium', {
+			title: constants.name,
+			baseUrl: nconf.get('url'),
+		});
+	});*/
+
+	hostHelpers.setupPageRoute(data.router, '/deauth/plutonium', [data.middleware.requireUser], (req, res) => {
+		res.render('deauth', {
+			service: 'Plutonium',
+		});
+	});
+
+	data.router.post('/deauth/plutonium', [data.middleware.requireUser, data.middleware.applyCSRF], (req, res, next) => {
+		OAuth.deleteUserData({
+			uid: req.user.uid,
+		}, (err) => {
+			if (err) {
+				return next(err);
+			}
+
+			res.redirect(`${nconf.get('relative_path')}/me/edit`);
+		});
+	});
+
+
+	callback()
+};
+
+OAuth.getAssociation = function (data, callback) {
+	User.getUserField(data.uid, `${constants.name}Id`, (err, plutoID) => {
+		if (err) {
+			return callback(err, data);
+		}
+		winston.info("[sso-oauth][getAssociation] got plutoID " + plutoID);
+		if (plutoID) {
+			data.associations.push({
+				associated: true,
+				url: `https://forum.plutonium.pw/uid/${plutoID}`,
+				deauthUrl: `${nconf.get('url')}/deauth/plutonium`,
+				name: "Plutonium",
+				icon: constants.icon,
+			});
+		} else {
+			data.associations.push({
+				associated: false,
+				url: `${nconf.get('url')}/auth/plutonium`,
+				name: "Plutonium",
+				icon: constants.icon,
+			});
+		}
+
+		callback(null, data);
+	});
+};
+
 OAuth.getStrategy = function (strategies, callback) {
+	winston.info("[Pluto-SSO][getStrategy] start");
 	if (configOk) {
 		passportOAuth = require('passport-oauth')[constants.type === 'oauth' ? 'OAuthStrategy' : 'OAuth2Strategy'];
+		winston.info("[Pluto-SSO][getStrategy] configOK");
+		// if (constants.type === 'oauth') {
+		// 	// OAuth options
+		// 	opts = constants.oauth;
+		// 	opts.callbackURL = `${nconf.get('url')}/auth/${constants.name}/callback`;
 
-		if (constants.type === 'oauth') {
-			// OAuth options
-			opts = constants.oauth;
-			opts.callbackURL = `${nconf.get('url')}/auth/${constants.name}/callback`;
+		// 	passportOAuth.Strategy.prototype.userProfile = function (token, secret, params, done) {
+		// 		// If your OAuth provider requires the access token to be sent in the query  parameters
+		// 		// instead of the request headers, comment out the next line:
+		// 		this._oauth._useAuthorizationHeaderForGET = true;
 
-			passportOAuth.Strategy.prototype.userProfile = function (token, secret, params, done) {
-				// If your OAuth provider requires the access token to be sent in the query  parameters
-				// instead of the request headers, comment out the next line:
-				this._oauth._useAuthorizationHeaderForGET = true;
+		// 		this._oauth.get(constants.userRoute, token, secret, (err, body/* , res */) => {
+		// 			if (err) {
+		// 				return done(err);
+		// 			}
 
-				this._oauth.get(constants.userRoute, token, secret, (err, body/* , res */) => {
-					if (err) {
-						return done(err);
-					}
+		// 			try {
+		// 				const json = JSON.parse(body);
+		// 				OAuth.parseUserReturn(json, (err, profile) => {
+		// 					if (err) return done(err);
+		// 					profile.provider = constants.name;
 
-					try {
-						const json = JSON.parse(body);
-						OAuth.parseUserReturn(json, (err, profile) => {
-							if (err) return done(err);
-							profile.provider = constants.name;
-
-							done(null, profile);
-						});
-					} catch (e) {
-						done(e);
-					}
-				});
-			};
-		} else if (constants.type === 'oauth2') {
+		// 					done(null, profile);
+		// 				});
+		// 			} catch (e) {
+		// 				done(e);
+		// 			}
+		// 		});
+		// 	};
+		// } else 
+		if (constants.type === 'oauth2') {
 			// OAuth 2 options
 			opts = constants.oauth2;
 			opts.callbackURL = `${nconf.get('url')}/auth/${constants.name}/callback`;
+			opts.response_type="code";
 
 			passportOAuth.Strategy.prototype.userProfile = function (accessToken, done) {
 				// If your OAuth provider requires the access token to be sent in the query  parameters
 				// instead of the request headers, comment out the next line:
-				//this._oauth2._useAuthorizationHeaderForGET = true;
+				this._oauth2._useAuthorizationHeaderForGET = true;
 
 				this._oauth2.get(constants.userRoute, accessToken, (err, body/* , res */) => {
 					if (err) {
-						return done(err);
+						winston.error(`[Pluto-SSO][getStrategy] failed to oauth get "${constants.userRoute}" with accessToken "${accessToken}" error object is` + JSON.stringify(err, null, 4));
+						return done(Error("Bad response from from plutonium.pw"));
 					}
 
 					try {
@@ -140,31 +206,37 @@ OAuth.getStrategy = function (strategies, callback) {
 				});
 			};
 		}
-
+		winston.info("[Pluto-SSO][getStrategy] Checkpoint 1");
 		opts.passReqToCallback = true;
 
 		passport.use(constants.name, new passportOAuth(opts, async (req, token, secret, profile, done) => {
 			const user = await OAuth.login({
 				oAuthid: profile.id,
-				//handle: profile.displayName,
+				handle: profile.displayName,
 				//email: profile.emails[0].value,
 				//isAdmin: profile.isAdmin,
-			});
+			}, req);
 
-			authenticationController.onSuccessfulLogin(req, user.uid);
-			done(null, user);
+			if(user == undefined) {
+				return done(new Error("Plutonium SSO registration is disabled."));
+			}
+			else {
+				authenticationController.onSuccessfulLogin(req, user.uid);
+				done(null, user);
+			}
 		}));
-
+		winston.info("[Pluto-SSO][getStrategy] Checkpoint 2");
 		strategies.push({
 			name: constants.name,
 			url: `/auth/${constants.name}`,
 			callbackURL: `/auth/${constants.name}/callback`,
-			icon: 'fa-check-square',
+			icon: constants.icon,
 			scope: (constants.scope || '').split(','),
 		});
-
+		winston.info("[Pluto-SSO][getStrategy] Checkpoint 3");
 		callback(null, strategies);
 	} else {
+		winston.error("[Pluto-SSO][getStrategy] OAuth Configuration is invalid");
 		callback(new Error('OAuth Configuration is invalid'));
 	}
 };
@@ -175,25 +247,28 @@ OAuth.parseUserReturn = function (data, callback) {
 	// Everything else is optional.
 
 	// Find out what is available by uncommenting this line:
-	 console.log(data);
+	// console.log(data);
+	// winston.info("[Pluto-SSO][parseUserReturn] data " + JSON.stringify(data, null, 4));
 
 	const profile = {};
-	profile.id = data.id;
-	profile.displayName = data.name;
-	profile.emails = [{ value: data.email }];
+	profile.id = data.user.id;
+	profile.displayName = data.user.username;
 
 	// Do you want to automatically make somebody an admin? This line might help you do that...
 	// profile.isAdmin = data.isAdmin ? true : false;
 
 	// Delete or comment out the next TWO (2) lines when you are ready to proceed
-	process.stdout.write('===\nAt this point, you\'ll need to customise the above section to id, displayName, and emails into the "profile" object.\n===');
-	return callback(new Error('Congrats! So far so good -- please see server log for details'));
+	//process.stdout.write('===\nAt this point, you\'ll need to customise the above section to id, displayName, and emails into the "profile" object.\n===');
+	//winston.info("[Pluto-SSO][parseUserReturn] Congrats! So far so good -- please see server log for details " + JSON.stringify(data, null, 4));
+	//return callback(Error('Congrats! So far so good -- please see server log for details'));
 
 	// eslint-disable-next-line
 		callback(null, profile);
 };
 
-OAuth.login = async (payload) => {
+OAuth.login = async (payload, req) => {
+
+	//if user can be found with his plutonium id use it
 	let uid = await OAuth.getUidByOAuthid(payload.oAuthid);
 	if (uid !== null) {
 		// Existing User
@@ -201,6 +276,17 @@ OAuth.login = async (payload) => {
 			uid: uid,
 		});
 	}
+	//winston.info("[sso-oauth][OAuth.login] " + JSON.stringify(req, null, 4));
+	//if not check if a user is already logged in and link the accounts
+	if (req.user && req.user.uid) {
+		winston.info("[sso-oauth][OAuth.login] Could not find a user with Pluto ID " + payload.oAuthid + " but user " + req.user.uid + " is logged in; linking them now!");
+		await db.setObjectField(`${constants.name}Id:uid`, payload.oAuthid, req.user.uid);
+		await User.setUserField(req.user.uid, `${constants.name}Id`, payload.oAuthid);
+		return ({
+			uid: req.user.uid,
+		});
+	  }
+	
 	//Plutonium does not expose user email addresses so trying to use them as backup won't work
 	return;
 
@@ -242,10 +328,12 @@ OAuth.login = async (payload) => {
 OAuth.getUidByOAuthid = async oAuthid => db.getObjectField(`${constants.name}Id:uid`, oAuthid);
 
 OAuth.deleteUserData = function (data, callback) {
+	const { uid } = data;
 	async.waterfall([
 		async.apply(User.getUserField, data.uid, `${constants.name}Id`),
 		function (oAuthIdToDelete, next) {
 			db.deleteObjectField(`${constants.name}Id:uid`, oAuthIdToDelete, next);
+			User.setUserField(uid, `${constants.name}Id`, null);
 		},
 	], (err) => {
 		if (err) {
@@ -262,3 +350,4 @@ OAuth.whitelistFields = function (params, callback) {
 	params.whitelist.push(`${constants.name}Id`);
 	callback(null, params);
 };
+module.exports = OAuth;
