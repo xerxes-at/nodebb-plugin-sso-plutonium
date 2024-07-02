@@ -178,7 +178,7 @@ OAuth.getStrategy = function (strategies, callback) {
 		if (constants.type === 'oauth2') {
 			// OAuth 2 options
 			opts = constants.oauth2;
-			opts.callbackURL = `${nconf.get('url')}/auth/${constants.name}/callback`;
+			opts.callbackURL = `${nconf.get('url')}/auth/plutonium/callback`;
 			opts.response_type="code";
 
 			passportOAuth.Strategy.prototype.userProfile = function (accessToken, done) {
@@ -210,26 +210,39 @@ OAuth.getStrategy = function (strategies, callback) {
 		opts.passReqToCallback = true;
 
 		passport.use(constants.name, new passportOAuth(opts, async (req, token, secret, profile, done) => {
-			const user = await OAuth.login({
+
+
+			if (req.hasOwnProperty('user') && req.user.hasOwnProperty('uid') && req.user.uid > 0) {
+				// Save Steam-specific information to the user
+				//User.setUserField(req.user.uid, 'steamid', profile.id);
+				//db.setObjectField('steamid:uid', profile.id, req.user.uid);
+				await db.setObjectField(`plutoniumId:uid`, profile.id, req.user.uid);
+				await User.setUserField(req.user.uid, `plutoniumId`, profile.id);
+				return done(null, req.user);
+			}
+
+			OAuth.login({
 				oAuthid: profile.id,
 				handle: profile.displayName,
 				//email: profile.emails[0].value,
 				//isAdmin: profile.isAdmin,
-			}, req);
+			}, req, (err, user) => {
 
-			if(user == undefined) {
-				return done(new Error("Plutonium SSO registration is disabled."));
-			}
-			else {
-				authenticationController.onSuccessfulLogin(req, user.uid);
-				done(null, user);
-			}
+				if(err) {
+					return done(err);
+				}
+				else {
+					authenticationController.onSuccessfulLogin(req, user.uid);
+					done(null, user);
+				}
+					
+			});
 		}));
 		winston.info("[Pluto-SSO][getStrategy] Checkpoint 2");
 		strategies.push({
 			name: constants.name,
-			url: `/auth/${constants.name}`,
-			callbackURL: `/auth/${constants.name}/callback`,
+			url: `/auth/plutonium`,
+			callbackURL: `/auth/plutonium/callback`,
 			icon: constants.icon,
 			scope: (constants.scope || '').split(','),
 		});
@@ -266,29 +279,33 @@ OAuth.parseUserReturn = function (data, callback) {
 		callback(null, profile);
 };
 
-OAuth.login = async (payload, req) => {
+OAuth.login = async (payload, req, callback) => {
 
 	//if user can be found with his plutonium id use it
 	let uid = await OAuth.getUidByOAuthid(payload.oAuthid);
 	if (uid !== null) {
 		// Existing User
-		return ({
+		callback(null, {
 			uid: uid,
 		});
 	}
-	//winston.info("[sso-oauth][OAuth.login] " + JSON.stringify(req, null, 4));
-	//if not check if a user is already logged in and link the accounts
-	if (req.user && req.user.uid) {
-		winston.info("[sso-oauth][OAuth.login] Could not find a user with Pluto ID " + payload.oAuthid + " but user " + req.user.uid + " is logged in; linking them now!");
-		await db.setObjectField(`${constants.name}Id:uid`, payload.oAuthid, req.user.uid);
-		await User.setUserField(req.user.uid, `${constants.name}Id`, payload.oAuthid);
-		return ({
-			uid: req.user.uid,
+	else
+	{
+		User.create({ username: handle }, (err, uid) => {
+			if (err) {
+				return callback(err);
+			}
+
+			// Save pluto-specific information to the user
+			db.setObjectField(`plutoniumId:uid`, profile.id, req.user.uid);
+			User.setUserField(req.user.uid, `plutoniumId`, profile.id);
+
+			callback(null, {
+				uid: uid,
+			});
 		});
-	  }
-	
-	//Plutonium does not expose user email addresses so trying to use them as backup won't work
-	return;
+	}
+	//winston.info("[sso-oauth][OAuth.login] " + JSON.stringify(req, null, 4));
 
 	// Check for user via email fallback
 	// uid = await User.getUidByEmail(payload.email);
@@ -325,15 +342,15 @@ OAuth.login = async (payload, req) => {
 	// };
 };
 
-OAuth.getUidByOAuthid = async oAuthid => db.getObjectField(`${constants.name}Id:uid`, oAuthid);
+OAuth.getUidByOAuthid = async oAuthid => db.getObjectField(`plutoniumId:uid`, oAuthid);
 
 OAuth.deleteUserData = function (data, callback) {
 	const { uid } = data;
 	async.waterfall([
-		async.apply(User.getUserField, data.uid, `${constants.name}Id`),
+		async.apply(User.getUserField, data.uid, `plutoniumId`),
 		function (oAuthIdToDelete, next) {
-			db.deleteObjectField(`${constants.name}Id:uid`, oAuthIdToDelete, next);
-			User.setUserField(uid, `${constants.name}Id`, null);
+			db.deleteObjectField(`plutoniumId:uid`, oAuthIdToDelete, next);
+			User.setUserField(uid, `plutoniumId`, null);
 		},
 	], (err) => {
 		if (err) {
@@ -347,7 +364,7 @@ OAuth.deleteUserData = function (data, callback) {
 
 // If this filter is not there, the deleteUserData function will fail when getting the oauthId for deletion.
 OAuth.whitelistFields = function (params, callback) {
-	params.whitelist.push(`${constants.name}Id`);
+	params.whitelist.push(`plutoniumId`);
 	callback(null, params);
 };
 module.exports = OAuth;
